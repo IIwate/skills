@@ -1,0 +1,22 @@
+{
+  "task_id": "task-001",
+  "exec_state": "implemented",
+  "min_verify_state": "pass",
+  "artifact": {
+    "summary": "已完成核心改动并保持兼容。",
+    "deliverables": [
+      "补丁说明",
+      "关键实现点"
+    ]
+  },
+  "files_changed": [
+    "src/example.ts"
+  ],
+  "commands_run": [
+    "npm run test -- example.spec.ts"
+  ],
+  "error_code": "",
+  "error_summary": "",
+  "notes": "如需补充回归测试，请由主线程验收阶段执行。"
+}
+
