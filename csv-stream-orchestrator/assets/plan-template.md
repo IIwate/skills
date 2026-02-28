@@ -30,8 +30,11 @@
 - `批次ID`：{{batch_id}}
 - `最大并发（固定）`：6（每批最多 6 个 worker）
 - `最大重试次数`：{{max_attempt}}
+- `单任务最短观察时长（分钟）`：{{worker_min_watch_minutes}}
+- `单任务最大执行时长（分钟）`：{{worker_max_runtime_minutes}}
 - `依赖策略`：主线程先完成依赖引入，子线程禁止引入依赖
 - `调度方式`：按批次 `spawn_agent` + `wait`（固定批大小 6，批内收敛后再进入下一批）
+- `超时策略`：按 `最短观察时长` 轮询；未到 `最大执行时长` 禁止提前结束 worker；到达上限后才允许判定 `WORKER_TIMEOUT` 并回流
 - `通知与回收规则`：异步通知只记录；完成打印与 `close_agent` 仅由 `wait` 返回结果驱动
 - `MCP 回收策略`：每批分发前 `snapshot`；当前批次全部 worker 完成并 `wait + close_agent` 后执行一次 `cleanup`；仅当 `remaining_owner_delta_count=0` 时允许启动下一批（会话绑定，先 dry-run；默认成功后自动删基线，失败或 `--keep-baseline` 时保留）
 - `批次推进门槛`：当前批次必须完成 `wait + close_agent + cleanup`，且清理结果达标后才能启动下一批

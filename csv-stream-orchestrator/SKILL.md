@@ -58,6 +58,13 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 若 `cleanup` 后仍存在 owner 增量进程（`remaining_owner_delta_count>0`），禁止继续起下一批 worker，必须先处理清理异常。
 - 回流任务进入后续批次队列，禁止在当前批次中途补位新增 worker。
 
+## Worker 观察与超时（硬约束）
+- 主线程必须在计划中为每个任务（或任务分组）设置两个时间参数：`最短观察时长（分钟）` 与 `最大执行时长（分钟）`。
+- 主线程对单个 worker 的首次状态检查，不得早于该任务的 `最短观察时长`。
+- 未达到 `最大执行时长` 前，禁止提前结束 worker（禁止因等待焦虑执行 `interrupt`、`close_agent` 或其他提前终止动作）。
+- 当 worker 达到 `最大执行时长` 仍未终态时，主线程才可判定超时并回写 `错误码=WORKER_TIMEOUT`，随后执行回流重分发。
+- `最大执行时长` 允许按任务难度分级设置（例如轻量任务更短、复杂任务更长），但必须在分发前写入计划并固定。
+
 ## 执行流程
 1. 使用 `multi_tool_use.parallel` 做只读并行探索，收集实现上下文。
 2. 按 `assets/plan-template.md` 输出计划，等待用户确认。
@@ -71,12 +78,14 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 5. 每批启动前，主线程先调用 `worker-mcp-cleanup` 的 `snapshot`（或执行 `python ../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py --mode snapshot --snapshot-path docs/csv/YYYY-MM-DD-<topic>/mcp-baseline.json`）记录该批基线。
 6. 主线程仅为当前批次创建 worker（最多 6 个），并按 `assets/worker-dispatch-template.md` 渲染任务单后立即下发（首次分发可直接作为 `spawn_agent` 的 `message`；回流重试再用 `send_input`）。
 7. 主线程维护当前批次的 `pending_worker_ids` 收敛循环并做流式验收：
-   - `while pending_worker_ids 非空`：调用 `wait(ids=pending_worker_ids)` 等待已终态 worker。
+   - `while pending_worker_ids 非空`：按任务配置的 `最短观察时长` 调用 `wait(ids=pending_worker_ids, timeout_ms=...)` 轮询已终态 worker（分钟换算为毫秒）。
+   - 若 `wait` 超时且未到相关任务 `最大执行时长`，继续等待，禁止提前结束该 worker。
    - 异步通知（例如 `subagent_notification`）只做记录，不做状态迁移、不执行 `close_agent`、不改动 `pending_worker_ids`。
    - 仅按本次 `wait` 返回中的已终态 worker 执行打印与回传处理：先做 JSON Schema 强校验（推荐用 `scripts/worker_result_to_csv.py` 自动校验并回写 CSV）。
      - 不通过：优先要求同一 worker “仅重发 JSON”（不重做实现），最多 2 次。
      - 仍不通过：写入 `错误码=WORKER_OUTPUT_SCHEMA_INVALID`、`错误摘要` 以 `[worker] ` 开头；并将 `执行状态=worker_failed`、`最小验证结果=unknown` 回写到任务 CSV，后续由主线程补跑 `最小验证` 决定回流与否。
    - 对 Schema 校验通过的任务立即进入流式验收（逐任务、快速失败）：先对 `最小验证结果 != pass` 的任务补跑 `最小验证`，仅当 `pass` 时才进入正式验收。
+   - 若任务达到 `最大执行时长` 仍未终态：主线程回写 `执行状态=worker_failed`、`最小验证结果=unknown`、`验收状态=accept_fail`、`错误码=WORKER_TIMEOUT`、`错误摘要=[worker] 超时未完成`，并执行回流重分发。
    - 对本次 `wait` 返回的已终态 worker 执行 `close_agent` 并从 `pending_worker_ids` 移除；当前批次禁止新建补位 worker。
 8. 当前批次全部 worker 完成并 `close_agent` 后，主线程立即执行一次 `worker-mcp-cleanup` 的 `cleanup`（建议先 `--dry-run` 再正式清理）回收本批新增 MCP 进程。
    - `cleanup` 后必须检查 `remaining_owner_delta_count`；仅当其为 `0` 才允许启动下一批。
@@ -159,6 +168,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 | 开始执行正式验收 | `验收状态=accepting` | `验收状态`、`更新时间` |
 | 正式验收通过 | `验收状态=accept_pass` | `验收状态`、`错误码`、`错误摘要`、`修复提示`、`更新时间` |
 | `min_verify_state=fail` 或补跑最小验证失败 | `验收状态=accept_fail` | `验收状态`、`错误码`、`错误摘要`、`修复提示`、`更新时间` |
+| worker 达到 `最大执行时长` 仍未终态 | `执行状态=worker_failed`，`最小验证结果=unknown`，`验收状态=accept_fail` | `执行状态`、`最小验证结果`、`验收状态`、`错误码=WORKER_TIMEOUT`、`错误摘要=[worker] 超时未完成`、`更新时间` |
 | `accept_fail` 且 `重试次数 + 1 < 最大重试次数` | `执行状态=requeued` | `执行状态`、`重试次数=重试次数+1`、`更新时间` |
 | `accept_fail` 且 `重试次数 + 1 >= 最大重试次数` | `执行状态=terminal_fail` | `执行状态`、`重试次数=重试次数+1`、`错误码`、`错误摘要`、`修复提示`、`更新时间` |
 
@@ -176,6 +186,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 回传 JSON 强校验：主线程必须按 `assets/worker-result-schema.json` 校验 worker 回传；不通过时先要求 worker 仅重发 JSON，仍不通过则写入 `错误码=WORKER_OUTPUT_SCHEMA_INVALID` 并视为 `min_verify_state=unknown`，由主线程补跑 `最小验证` 决定后续回流与否。
 - 主线程必须按“每批最多 6 个 worker”维护批内 `pending_worker_ids` 收敛循环；当前批次禁止补位新增 worker。
 - 回流任务只允许回写为 `requeued` 后进入后续批次队列，不得在当前批次中途追加。
+- 主线程必须为任务设置 `最短观察时长（分钟）` 与 `最大执行时长（分钟）`；未达到最大时长前禁止提前结束 worker。
 - 异步通知（例如 `subagent_notification`）仅用于辅助日志，禁止据此执行 `close_agent` 或变更 `pending_worker_ids`。
 - 任务完成打印与 `close_agent` 只允许由当前批次的 `wait(ids=pending_worker_ids)` 返回结果驱动。
 - `cleanup` 必须按批次执行：每批全部 worker 完成并 `close_agent` 后立即执行一次；`remaining_owner_delta_count=0` 前禁止启动下一批。
@@ -202,6 +213,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 主线程为状态文件唯一写入者，禁止 worker 直接改状态 CSV。
 - 异步通知只记录，不做关闭动作；仅依据 `wait` 返回结果打印完成信息并执行 `close_agent`。
 - 主线程在每个批次启动前必须执行 MCP `snapshot`；每批全部任务完成并 `wait + close_agent` 后必须执行一次 MCP `cleanup`，且 `remaining_owner_delta_count=0` 才能启动下一批（推荐先 `--dry-run` 再正式清理，默认成功后自动删基线；需保留时显式 `--keep-baseline`）。
+- 主线程必须在计划中明确 `最短观察时长（分钟）` 与 `最大执行时长（分钟）`，并按该配置执行 `wait` 轮询与超时判定。
 - 当 `重试次数 >= 最大重试次数` 时置为 `terminal_fail` 并进入人工处理。
 - 所有生成或回写的 CSV 文件统一使用 `UTF-8 BOM` 编码，避免 Windows 终端和表格工具乱码。
 - 任务清单 CSV 的标准落盘路径为 `docs/csv/YYYY-MM-DD-<topic>/YYYY-MM-DD-<topic>.csv`。
