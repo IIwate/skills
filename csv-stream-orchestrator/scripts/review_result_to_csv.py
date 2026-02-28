@@ -54,10 +54,6 @@ def is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def is_string_list(value: Any) -> bool:
-    return isinstance(value, list) and all(isinstance(x, str) for x in value)
-
-
 @dataclass(frozen=True)
 class ValidationError:
     path: str
@@ -104,8 +100,33 @@ def validate_review_result(obj: Any, schema: dict[str, Any]) -> list[ValidationE
         return [ValidationError("$", "结果必须是 JSON object")]
 
     errors: list[ValidationError] = []
-    required = schema.get("required", [])
+    required = [k for k in schema.get("required", []) if isinstance(k, str)]
     properties: dict[str, Any] = schema.get("properties", {}) or {}
+
+    def check_string(value: Any, path: str, field_schema: dict[str, Any]) -> None:
+        if not isinstance(value, str):
+            errors.append(ValidationError(path, "必须是 string"))
+            return
+        min_length = field_schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            errors.append(ValidationError(path, f"长度必须 >= {min_length}"))
+        enum_values = field_schema.get("enum")
+        if isinstance(enum_values, list) and value not in enum_values:
+            errors.append(ValidationError(path, f"必须为 {enum_values} 之一"))
+        pattern = field_schema.get("pattern")
+        if isinstance(pattern, str) and re.match(pattern, value) is None:
+            errors.append(ValidationError(path, "格式不匹配 schema pattern"))
+
+    def check_integer(value: Any, path: str, field_schema: dict[str, Any]) -> None:
+        if not is_int(value):
+            errors.append(ValidationError(path, "必须是整数"))
+            return
+        minimum = field_schema.get("minimum")
+        if isinstance(minimum, (int, float)) and value < minimum:
+            errors.append(ValidationError(path, f"范围必须 >= {minimum}"))
+        maximum = field_schema.get("maximum")
+        if isinstance(maximum, (int, float)) and value > maximum:
+            errors.append(ValidationError(path, f"范围必须 <= {maximum}"))
 
     for key in required:
         if key not in obj:
@@ -116,152 +137,112 @@ def validate_review_result(obj: Any, schema: dict[str, Any]) -> list[ValidationE
         for extra_key in sorted(set(obj.keys()) - allowed):
             errors.append(ValidationError(f"$.{extra_key}", "不允许的额外字段"))
 
-    review_task_id = obj.get("review_task_id")
-    if not isinstance(review_task_id, str) or not review_task_id.strip():
-        errors.append(ValidationError("$.review_task_id", "必须是非空字符串"))
-
-    review_decision = obj.get("review_decision")
-    allowed_decisions = (
-        (properties.get("review_decision") or {}).get("enum")
-        or ["PASS", "NEEDS_IMPROVEMENT", "BLOCKED"]
+    check_string(
+        obj.get("review_task_id"),
+        "$.review_task_id",
+        properties.get("review_task_id", {}) or {},
     )
-    if review_decision not in allowed_decisions:
-        errors.append(ValidationError("$.review_decision", f"必须为 {allowed_decisions} 之一"))
-
-    if not isinstance(obj.get("summary"), str):
-        errors.append(ValidationError("$.summary", "必须是 string"))
+    check_string(
+        obj.get("review_decision"),
+        "$.review_decision",
+        properties.get("review_decision", {}) or {},
+    )
+    check_string(obj.get("summary"), "$.summary", properties.get("summary", {}) or {})
 
     scores = obj.get("scores")
-    score_keys = [
-        "root_cause_resolution",
-        "code_quality",
-        "side_effects",
-        "edge_cases",
-        "test_coverage",
-        "total",
-    ]
+    scores_schema: dict[str, Any] = properties.get("scores", {}) or {}
     if not isinstance(scores, dict):
         errors.append(ValidationError("$.scores", "必须是 object"))
     else:
-        for k in score_keys:
-            v = scores.get(k)
-            if not is_int(v):
-                errors.append(ValidationError(f"$.scores.{k}", "必须是整数"))
-        for k in score_keys[:-1]:
-            v = scores.get(k)
-            if is_int(v) and (v < 0 or v > 20):
-                errors.append(ValidationError(f"$.scores.{k}", "范围必须在 0-20"))
-        total = scores.get("total")
-        if is_int(total) and (total < 0 or total > 100):
-            errors.append(ValidationError("$.scores.total", "范围必须在 0-100"))
-        if all(is_int(scores.get(k)) for k in score_keys):
-            subtotal = sum(int(scores[k]) for k in score_keys[:-1])
-            if int(scores["total"]) != subtotal:
-                errors.append(
-                    ValidationError(
-                        "$.scores.total",
-                        f"应等于前五项之和（期望 {subtotal}，实际 {scores['total']}）",
-                    )
-                )
+        score_required = [
+            k for k in scores_schema.get("required", []) if isinstance(k, str)
+        ]
+        score_props: dict[str, Any] = scores_schema.get("properties", {}) or {}
+        for key in score_required:
+            if key not in scores:
+                errors.append(ValidationError(f"$.scores.{key}", "缺少必填字段"))
+        if scores_schema.get("additionalProperties") is False:
+            allowed_score_keys = set(score_props.keys())
+            for extra_key in sorted(set(scores.keys()) - allowed_score_keys):
+                errors.append(ValidationError(f"$.scores.{extra_key}", "不允许的额外字段"))
+        for key, field_schema in score_props.items():
+            if key not in scores:
+                continue
+            value = scores.get(key)
+            field_type = field_schema.get("type")
+            if field_type == "integer":
+                check_integer(value, f"$.scores.{key}", field_schema)
+            elif field_type == "string":
+                check_string(value, f"$.scores.{key}", field_schema)
 
     issues = obj.get("issues")
+    issues_schema: dict[str, Any] = properties.get("issues", {}) or {}
     if not isinstance(issues, list):
         errors.append(ValidationError("$.issues", "必须是 array"))
     else:
-        allowed_issue_severity = {"critical", "major", "minor", "info"}
-        allowed_issue_category = {
-            "security",
-            "code_quality",
-            "performance",
-            "reliability",
-            "compatibility",
-            "test_coverage",
-            "other",
-        }
+        issue_item_schema: dict[str, Any] = issues_schema.get("items", {}) or {}
+        issue_required = [
+            k for k in issue_item_schema.get("required", []) if isinstance(k, str)
+        ]
+        issue_props: dict[str, Any] = issue_item_schema.get("properties", {}) or {}
         for i, issue in enumerate(issues):
             path = f"$.issues[{i}]"
             if not isinstance(issue, dict):
                 errors.append(ValidationError(path, "必须是 object"))
                 continue
-            required_issue_fields = [
-                "source_task_id",
-                "severity",
-                "category",
-                "evidence",
-                "reason",
-                "fix_hint",
-            ]
-            for key in required_issue_fields:
+            for key in issue_required:
                 if key not in issue:
                     errors.append(ValidationError(f"{path}.{key}", "缺少必填字段"))
-            sid = issue.get("source_task_id")
-            if not isinstance(sid, str) or not sid.strip():
-                errors.append(ValidationError(f"{path}.source_task_id", "必须是非空字符串"))
-            if issue.get("severity") not in allowed_issue_severity:
-                errors.append(
-                    ValidationError(
-                        f"{path}.severity",
-                        "必须为 critical/major/minor/info 之一",
-                    )
-                )
-            if issue.get("category") not in allowed_issue_category:
-                errors.append(ValidationError(f"{path}.category", "类型不在允许范围"))
-            for key in ["evidence", "reason", "fix_hint"]:
-                if not isinstance(issue.get(key), str):
-                    errors.append(ValidationError(f"{path}.{key}", "必须是 string"))
+            if issue_item_schema.get("additionalProperties") is False:
+                allowed_issue_keys = set(issue_props.keys())
+                for extra_key in sorted(set(issue.keys()) - allowed_issue_keys):
+                    errors.append(ValidationError(f"{path}.{extra_key}", "不允许的额外字段"))
+            for key, field_schema in issue_props.items():
+                if key not in issue:
+                    continue
+                value = issue.get(key)
+                field_type = field_schema.get("type")
+                if field_type == "string":
+                    check_string(value, f"{path}.{key}", field_schema)
+                elif field_type == "integer":
+                    check_integer(value, f"{path}.{key}", field_schema)
 
     new_tasks = obj.get("new_tasks")
+    new_tasks_schema: dict[str, Any] = properties.get("new_tasks", {}) or {}
     if not isinstance(new_tasks, list):
         errors.append(ValidationError("$.new_tasks", "必须是 array"))
     else:
-        seen_new_ids: set[str] = set()
+        task_item_schema: dict[str, Any] = new_tasks_schema.get("items", {}) or {}
+        task_required = [
+            k for k in task_item_schema.get("required", []) if isinstance(k, str)
+        ]
+        task_props: dict[str, Any] = task_item_schema.get("properties", {}) or {}
         for i, task in enumerate(new_tasks):
             path = f"$.new_tasks[{i}]"
             if not isinstance(task, dict):
                 errors.append(ValidationError(path, "必须是 object"))
                 continue
-            required_task_fields = [
-                "task_id",
-                "source_task_id",
-                "depends_on_task_id",
-                "target_path",
-                "task_desc",
-                "min_verify",
-                "max_retry",
-            ]
-            for key in required_task_fields:
+            for key in task_required:
                 if key not in task:
                     errors.append(ValidationError(f"{path}.{key}", "缺少必填字段"))
-            task_id = task.get("task_id")
-            source_task_id = task.get("source_task_id")
-            if not isinstance(task_id, str) or not task_id.strip():
-                errors.append(ValidationError(f"{path}.task_id", "必须是非空字符串"))
-            if not isinstance(source_task_id, str) or not source_task_id.strip():
-                errors.append(ValidationError(f"{path}.source_task_id", "必须是非空字符串"))
-            if isinstance(task_id, str):
-                if task_id in seen_new_ids:
-                    errors.append(ValidationError(f"{path}.task_id", "在 new_tasks 中重复"))
-                seen_new_ids.add(task_id)
-            for key in ["depends_on_task_id", "target_path", "task_desc", "min_verify"]:
-                if not isinstance(task.get(key), str):
-                    errors.append(ValidationError(f"{path}.{key}", "必须是 string"))
-            max_retry = task.get("max_retry")
-            if not is_int(max_retry):
-                errors.append(ValidationError(f"{path}.max_retry", "必须是整数"))
-            elif int(max_retry) < 1 or int(max_retry) > 10:
-                errors.append(ValidationError(f"{path}.max_retry", "范围必须在 1-10"))
+            if task_item_schema.get("additionalProperties") is False:
+                allowed_task_keys = set(task_props.keys())
+                for extra_key in sorted(set(task.keys()) - allowed_task_keys):
+                    errors.append(ValidationError(f"{path}.{extra_key}", "不允许的额外字段"))
+            for key, field_schema in task_props.items():
+                if key not in task:
+                    continue
+                value = task.get(key)
+                field_type = field_schema.get("type")
+                if field_type == "string":
+                    check_string(value, f"{path}.{key}", field_schema)
+                elif field_type == "integer":
+                    check_integer(value, f"{path}.{key}", field_schema)
 
-    error_code = obj.get("error_code")
-    if not isinstance(error_code, str) or not re.match(r"^(|REVIEW_[A-Z0-9_]+)$", error_code):
-        errors.append(ValidationError("$.error_code", "必须为空或 REVIEW_ 前缀的大写下划线编码"))
-
-    if not isinstance(obj.get("notes"), str):
-        errors.append(ValidationError("$.notes", "必须是 string"))
-
-    if review_decision == "PASS" and isinstance(new_tasks, list) and new_tasks:
-        errors.append(ValidationError("$.new_tasks", "review_decision=PASS 时不应提供 new_tasks"))
-    if review_decision == "BLOCKED" and isinstance(new_tasks, list) and new_tasks:
-        errors.append(ValidationError("$.new_tasks", "review_decision=BLOCKED 时不应提供 new_tasks"))
+    check_string(
+        obj.get("error_code"), "$.error_code", properties.get("error_code", {}) or {}
+    )
+    check_string(obj.get("notes"), "$.notes", properties.get("notes", {}) or {})
 
     return errors
 
@@ -375,11 +356,18 @@ def main(argv: list[str]) -> int:
     pending_new_ids: set[str] = set()
     for task in append_candidates:
         task_id = str(task["task_id"]).strip()
+        source_task_id = str(task["source_task_id"]).strip()
         if task_id in existing_ids:
             print(f"[csv] 任务ID已存在，无法追加：{task_id}", file=sys.stderr)
             return 3
         if task_id in pending_new_ids:
             print(f"[csv] review new_tasks 内部任务ID重复：{task_id}", file=sys.stderr)
+            return 3
+        if source_task_id not in existing_ids:
+            print(
+                f"[csv] 来源任务ID不存在，无法追加：{source_task_id} (new task: {task_id})",
+                file=sys.stderr,
+            )
             return 3
         pending_new_ids.add(task_id)
 

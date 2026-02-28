@@ -21,6 +21,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 审查 worker 回传 JSON Schema：`assets/review-result-schema.json`
 - worker 回传校验与 CSV 回写脚本：`scripts/worker_result_to_csv.py`
 - 审查回传校验与 CSV 追加脚本（可选）：`scripts/review_result_to_csv.py`（是否调用由主线程决定）
+- 修改任一 Schema（`assets/*-schema.json`）时，必须同步更新并验证对应 Python 脚本，禁止只改一侧。
 - MCP 清理脚本（会话绑定版）：`../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py`
 
 ## 任务拆分规范（门控）
@@ -116,11 +117,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
    - 主线程先汇总“上一轮全部执行 worker”的输入包（CSV 任务状态、回传 JSON、验收日志、变更文件清单）。
    - 使用 `assets/review-dispatch-template.md` 组装审查任务单，明确审查对象为该全量输入包，并要求审查 worker 按 `assets/review-result-schema.json` 回传裸 JSON。
    - 主线程等待审查 worker 终态后执行 `close_agent`，随后立即执行一次 `cleanup`，并检查 `remaining_owner_delta_count=0`。
-11. 主线程消费审查结果：
-   - 若 `review_decision=NEEDS_IMPROVEMENT` 且 `new_tasks` 非空：将任务追加到原 CSV（UTF-8 BOM），然后回到步骤 4 进入下一轮分发。
-   - 任务追加可由主线程手工回写，或显式调用 `scripts/review_result_to_csv.py --apply` 自动追加；是否调用脚本由主线程决定。
-   - 若 `review_decision=PASS` 或 `new_tasks` 为空：不追加任务，进入最终收口。
-   - 若 `review_decision=BLOCKED`：写入阻塞信息并转人工处理。
+11. 主线程消费审查结果：严格按“审查回流阶段（硬约束）”执行（含 `NEEDS_IMPROVEMENT/PASS/BLOCKED` 分支与 `--apply` 约束），此处不重复展开。
 12. 全部任务闭环后统一收口：冲突处理、全量验证、交付说明。
 
 ## 路径与命名规则
@@ -215,13 +212,9 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 错误来源标记（accept）：写入 CSV 时，`错误码` 使用 `ACCEPT_` 前缀；`错误摘要` 以 `[accept] ` 开头。
 - 回传 JSON 强校验：主线程必须按 `assets/worker-result-schema.json` 校验 worker 回传；不通过时先要求 worker 仅重发 JSON，仍不通过则写入 `错误码=WORKER_OUTPUT_SCHEMA_INVALID` 并视为 `min_verify_state=unknown`，由主线程补跑 `最小验证` 决定后续回流与否。
 - 审查 JSON 强校验：主线程必须按 `assets/review-result-schema.json` 校验审查 worker 回传；不通过时写入 `错误码=REVIEW_OUTPUT_SCHEMA_INVALID` 并转人工处理。
-- 审查回流追加：当 `review_decision=NEEDS_IMPROVEMENT` 且 `new_tasks` 非空时，主线程将新任务追加到同一 CSV，且 `来源任务ID` 必须来自审查输出的 `source_task_id`。
-- `scripts/review_result_to_csv.py` 为可选工具：默认仅校验审查 JSON，不写 CSV；仅当主线程显式传入 `--apply` 时才允许追加写入。
-- 主线程必须按“每批最多 6 个 worker”维护批内 `pending_worker_ids` 收敛循环；当前批次禁止补位新增 worker。
-- 回流任务只允许回写为 `requeued` 后进入后续批次队列，不得在当前批次中途追加。
-- 主线程必须为任务设置 `最短观察时长（分钟）` 与 `最大执行时长（分钟）`；未达到最大时长前禁止提前结束 worker。
-- 异步通知（例如 `subagent_notification`）仅用于辅助日志，禁止据此执行 `close_agent` 或变更 `pending_worker_ids`。
-- 任务完成打印与 `close_agent` 只允许由当前批次的 `wait(ids=pending_worker_ids)` 返回结果驱动。
+- 审查回流与追加写入规则统一见“审查回流阶段（硬约束）”；本节不重复定义。
+- 批次并发上限、回流排队与“禁止中途补位”统一见“批次并发与内存释放（硬约束）”；本节不重复定义。
+- worker 观察超时与 `pending_worker_ids` 状态迁移统一见“Worker 观察与超时（硬约束）”及“执行流程”第 7 步；本节不重复定义。
 - `cleanup` 必须按批次执行：每批全部 worker 完成并 `close_agent` 后立即执行一次；`remaining_owner_delta_count=0` 前禁止启动下一批。
 - 审查 worker 必须单独执行 `snapshot + wait + close_agent + cleanup`；清理未达标时禁止进入下一轮分发。
 - 基线文件默认临时：`cleanup` 成功后自动删除；仅在 `cleanup` 失败或显式 `--keep-baseline` 时保留。

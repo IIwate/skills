@@ -47,55 +47,73 @@ def load_json_from_stdin() -> Any:
     return json.loads(text)
 
 
-def is_string_list(value: Any) -> bool:
-    return isinstance(value, list) and all(isinstance(x, str) for x in value)
-
-
 def validate_worker_result(obj: Any, schema: dict[str, Any]) -> list[ValidationError]:
     if not isinstance(obj, dict):
         return [ValidationError("$", "结果必须是 JSON object")]
 
     errors: list[ValidationError] = []
 
-    required = schema.get("required", [])
+    required = [k for k in schema.get("required", []) if isinstance(k, str)]
     for key in required:
         if key not in obj:
             errors.append(ValidationError(f"$.{key}", "缺少必填字段"))
 
     properties: dict[str, Any] = schema.get("properties", {}) or {}
+
+    def check_string(value: Any, path: str, field_schema: dict[str, Any]) -> None:
+        if not isinstance(value, str):
+            errors.append(ValidationError(path, "必须是 string"))
+            return
+        min_length = field_schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            errors.append(ValidationError(path, f"长度必须 >= {min_length}"))
+        enum_values = field_schema.get("enum")
+        if isinstance(enum_values, list) and value not in enum_values:
+            errors.append(ValidationError(path, f"必须为 {enum_values} 之一"))
+        pattern = field_schema.get("pattern")
+        if isinstance(pattern, str) and re.match(pattern, value) is None:
+            errors.append(ValidationError(path, "格式不匹配 schema pattern"))
+
+    def check_string_array(value: Any, path: str, field_schema: dict[str, Any]) -> None:
+        if not isinstance(value, list):
+            errors.append(ValidationError(path, "必须是 array"))
+            return
+        item_schema: dict[str, Any] = field_schema.get("items", {}) or {}
+        if item_schema.get("type") != "string":
+            return
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                errors.append(ValidationError(f"{path}[{i}]", "必须是 string"))
+
     if schema.get("additionalProperties") is False:
         allowed = set(properties.keys())
         for extra_key in sorted(set(obj.keys()) - allowed):
             errors.append(ValidationError(f"$.{extra_key}", "不允许的额外字段"))
 
-    task_id = obj.get("task_id")
-    if not isinstance(task_id, str) or not task_id.strip():
-        errors.append(ValidationError("$.task_id", "必须是非空字符串"))
-
-    exec_state = obj.get("exec_state")
-    allowed_exec = (
-        (properties.get("exec_state") or {}).get("enum")
-        or ["implemented", "blocked", "worker_failed"]
+    check_string(obj.get("task_id"), "$.task_id", properties.get("task_id", {}) or {})
+    check_string(
+        obj.get("exec_state"),
+        "$.exec_state",
+        properties.get("exec_state", {}) or {},
     )
-    if exec_state not in allowed_exec:
-        errors.append(ValidationError("$.exec_state", f"必须为 {allowed_exec} 之一"))
-
-    min_verify_state = obj.get("min_verify_state")
-    allowed_min_verify = (
-        (properties.get("min_verify_state") or {}).get("enum")
-        or ["unknown", "pass", "fail", "skip"]
+    check_string(
+        obj.get("min_verify_state"),
+        "$.min_verify_state",
+        properties.get("min_verify_state", {}) or {},
     )
-    if min_verify_state not in allowed_min_verify:
-        errors.append(
-            ValidationError("$.min_verify_state", f"必须为 {allowed_min_verify} 之一")
-        )
 
     artifact = obj.get("artifact")
     if not isinstance(artifact, dict):
         errors.append(ValidationError("$.artifact", "必须是 object"))
     else:
         artifact_schema: dict[str, Any] = properties.get("artifact", {}) or {}
+        artifact_required = [
+            k for k in artifact_schema.get("required", []) if isinstance(k, str)
+        ]
         artifact_props: dict[str, Any] = artifact_schema.get("properties", {}) or {}
+        for key in artifact_required:
+            if key not in artifact:
+                errors.append(ValidationError(f"$.artifact.{key}", "缺少必填字段"))
         if artifact_schema.get("additionalProperties") is False:
             allowed_artifact = set(artifact_props.keys())
             for extra_key in sorted(set(artifact.keys()) - allowed_artifact):
@@ -103,32 +121,38 @@ def validate_worker_result(obj: Any, schema: dict[str, Any]) -> list[ValidationE
                     ValidationError(f"$.artifact.{extra_key}", "不允许的额外字段")
                 )
 
-        if "summary" not in artifact:
-            errors.append(ValidationError("$.artifact.summary", "缺少必填字段"))
-        elif not isinstance(artifact.get("summary"), str):
-            errors.append(ValidationError("$.artifact.summary", "必须是 string"))
+        if "summary" in artifact:
+            check_string(
+                artifact.get("summary"),
+                "$.artifact.summary",
+                artifact_props.get("summary", {}) or {},
+            )
+        if "deliverables" in artifact:
+            check_string_array(
+                artifact.get("deliverables"),
+                "$.artifact.deliverables",
+                artifact_props.get("deliverables", {}) or {},
+            )
 
-        if "deliverables" not in artifact:
-            errors.append(ValidationError("$.artifact.deliverables", "缺少必填字段"))
-        elif not is_string_list(artifact.get("deliverables")):
-            errors.append(ValidationError("$.artifact.deliverables", "必须是 string 数组"))
-
-    if not is_string_list(obj.get("files_changed")):
-        errors.append(ValidationError("$.files_changed", "必须是 string 数组"))
-
-    if not is_string_list(obj.get("commands_run")):
-        errors.append(ValidationError("$.commands_run", "必须是 string 数组"))
-
-    error_code = obj.get("error_code")
-    pattern = re.compile(r"^(|WORKER_[A-Z0-9_]+)$")
-    if not isinstance(error_code, str) or not pattern.match(error_code):
-        errors.append(ValidationError("$.error_code", "必须为空或 WORKER_ 前缀的大写下划线编码"))
-
-    if not isinstance(obj.get("error_summary"), str):
-        errors.append(ValidationError("$.error_summary", "必须是 string"))
-
-    if not isinstance(obj.get("notes"), str):
-        errors.append(ValidationError("$.notes", "必须是 string"))
+    check_string_array(
+        obj.get("files_changed"),
+        "$.files_changed",
+        properties.get("files_changed", {}) or {},
+    )
+    check_string_array(
+        obj.get("commands_run"),
+        "$.commands_run",
+        properties.get("commands_run", {}) or {},
+    )
+    check_string(
+        obj.get("error_code"), "$.error_code", properties.get("error_code", {}) or {}
+    )
+    check_string(
+        obj.get("error_summary"),
+        "$.error_summary",
+        properties.get("error_summary", {}) or {},
+    )
+    check_string(obj.get("notes"), "$.notes", properties.get("notes", {}) or {})
 
     return errors
 
@@ -159,7 +183,10 @@ def write_csv_rows(
 
 def apply_result_to_row(row: dict[str, str], result: dict[str, Any]) -> None:
     row["执行状态"] = str(result.get("exec_state", "") or "")
-    row["最小验证结果"] = str(result.get("min_verify_state", "") or "")
+    min_verify_state = str(result.get("min_verify_state", "") or "")
+    row["最小验证结果"] = min_verify_state
+    if min_verify_state == "fail":
+        row["验收状态"] = "accept_fail"
     row["错误码"] = str(result.get("error_code", "") or "")
     row["错误摘要"] = str(result.get("error_summary", "") or "")
     row["更新时间"] = now_iso()
@@ -201,7 +228,15 @@ def main(argv: list[str]) -> int:
 
     fieldnames, rows = read_csv_rows(csv_path)
 
-    required_cols = {"任务ID", "执行状态", "最小验证结果", "错误码", "错误摘要", "更新时间"}
+    required_cols = {
+        "任务ID",
+        "执行状态",
+        "最小验证结果",
+        "验收状态",
+        "错误码",
+        "错误摘要",
+        "更新时间",
+    }
     missing_cols = sorted(c for c in required_cols if c not in fieldnames)
     if missing_cols:
         raise RuntimeError(f"CSV 缺少必要列：{', '.join(missing_cols)}")
