@@ -1,0 +1,106 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_task_id",
+    "review_decision",
+    "summary",
+    "scores",
+    "issues",
+    "new_tasks",
+    "error_code",
+    "notes"
+  ],
+  "properties": {
+    "review_task_id": { "type": "string", "minLength": 1 },
+    "review_decision": {
+      "type": "string",
+      "enum": ["PASS", "NEEDS_IMPROVEMENT", "BLOCKED"]
+    },
+    "summary": { "type": "string" },
+    "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root_cause_resolution",
+        "code_quality",
+        "side_effects",
+        "edge_cases",
+        "test_coverage",
+        "total"
+      ],
+      "properties": {
+        "root_cause_resolution": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "code_quality": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "side_effects": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "edge_cases": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "test_coverage": { "type": "integer", "minimum": 0, "maximum": 20 },
+        "total": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "source_task_id",
+          "severity",
+          "category",
+          "evidence",
+          "reason",
+          "fix_hint"
+        ],
+        "properties": {
+          "source_task_id": { "type": "string", "minLength": 1 },
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor", "info"]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "security",
+              "code_quality",
+              "performance",
+              "reliability",
+              "compatibility",
+              "test_coverage",
+              "other"
+            ]
+          },
+          "evidence": { "type": "string" },
+          "reason": { "type": "string" },
+          "fix_hint": { "type": "string" }
+        }
+      }
+    },
+    "new_tasks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "task_id",
+          "source_task_id",
+          "depends_on_task_id",
+          "target_path",
+          "task_desc",
+          "min_verify",
+          "max_retry"
+        ],
+        "properties": {
+          "task_id": { "type": "string", "minLength": 1 },
+          "source_task_id": { "type": "string", "minLength": 1 },
+          "depends_on_task_id": { "type": "string" },
+          "target_path": { "type": "string", "minLength": 1 },
+          "task_desc": { "type": "string", "minLength": 1 },
+          "min_verify": { "type": "string", "minLength": 1 },
+          "max_retry": { "type": "integer", "minimum": 1, "maximum": 10 }
+        }
+      }
+    },
+    "error_code": { "type": "string", "pattern": "^(|REVIEW_[A-Z0-9_]+)$" },
+    "notes": { "type": "string" }
+  }
+}

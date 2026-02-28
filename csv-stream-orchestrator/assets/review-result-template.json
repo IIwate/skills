@@ -1,0 +1,36 @@
+{
+  "review_task_id": "review-001",
+  "review_decision": "NEEDS_IMPROVEMENT",
+  "summary": "存在安全与边界处理问题，建议追加修复任务后再验收。",
+  "scores": {
+    "root_cause_resolution": 14,
+    "code_quality": 15,
+    "side_effects": 12,
+    "edge_cases": 10,
+    "test_coverage": 8,
+    "total": 59
+  },
+  "issues": [
+    {
+      "source_task_id": "task-001",
+      "severity": "critical",
+      "category": "security",
+      "evidence": "src/example.ts:42",
+      "reason": "入口参数未校验，存在注入风险。",
+      "fix_hint": "增加请求体 schema 校验并拒绝未知字段。"
+    }
+  ],
+  "new_tasks": [
+    {
+      "task_id": "task-001-R1",
+      "source_task_id": "task-001",
+      "depends_on_task_id": "",
+      "target_path": "src/example.ts",
+      "task_desc": "补齐输入参数校验并更新错误处理分支",
+      "min_verify": "npm run build",
+      "max_retry": 2
+    }
+  ],
+  "error_code": "",
+  "notes": "仅审查本轮变更，不涉及历史无关模块。"
+}

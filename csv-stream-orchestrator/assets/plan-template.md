@@ -42,7 +42,17 @@
 - `CSV 目录`：{{csv_dir}}
 - `目录规约`：以 `{{csv_dir}}` 为主体；`mcp-baseline.json` 与 CSV 同目录；非 baseline 辅助产物放 `{{csv_artifacts_dir}}`
 
-## 6. 输出物
+## 6. 审查回流参数
+- `审查 worker 并发（固定）`：1
+- `审查最短观察时长（分钟）`：{{review_min_watch_minutes}}
+- `审查最大执行时长（分钟）`：{{review_max_runtime_minutes}}
+- `审查触发条件`：执行 worker 全部完成并 cleanup 达标后
+- `审查对象`：上一轮全部执行 worker 的结果集合（CSV 状态 + 回传 JSON + 验收日志 + 变更文件清单）
+- `审查输出模板`：`assets/review-result-template.json`
+- `审查输出 Schema`：`assets/review-result-schema.json`
+- `审查回流策略`：`review_decision=NEEDS_IMPROVEMENT` 且 `new_tasks` 非空时追加到原 CSV，并进入下一轮分发
+
+## 7. 输出物
 - 设计文档：{{design_path}}
 - 任务 CSV：{{csv_path}}
 - MCP 快照：{{mcp_snapshot_path}}
