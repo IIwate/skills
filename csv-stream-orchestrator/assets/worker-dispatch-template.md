@@ -3,6 +3,7 @@
 ## 基本信息
 - `任务ID`: {{任务ID}}
 - `来源任务ID`: {{来源任务ID}}
+- `依赖任务ID`: {{依赖任务ID}}
 - `批次ID`: {{批次ID}}
 - `目标路径`: {{目标路径}}
 
@@ -19,6 +20,7 @@
 7. `min_verify_state` 允许值：`unknown`、`pass`、`fail`、`skip`。
 8. `error_code` 需使用 `WORKER_` 前缀（示例：`WORKER_DEPENDENCY_REQUIRED`、`WORKER_MIN_VERIFY_FAIL`）。
 9. 回传 JSON 将被主线程按 Schema 强校验；不符合会被标记为 `WORKER_OUTPUT_SCHEMA_INVALID`，主线程可能会补跑最小验证并回流重试。
+10. 若因共享工作区并发冲突（或依赖未就绪）无法执行最小验证，允许设置 `min_verify_state=skip`，并在 `notes` 写明原因（建议固定文案：`共享工作区` / `依赖未就绪`）。
 
 ## 最小验证
 `{{最小验证}}`
@@ -57,6 +59,6 @@
 
 ## 完成定义
 - 已实现目标或明确失败原因
-- 已执行最小验证（若可执行）
+- 已执行最小验证（若可执行；若 `skip` 必须在 `notes` 写明原因）
 - 未引入任何新依赖，未修改依赖清单与锁文件
 - 已按 JSON 模板返回结果

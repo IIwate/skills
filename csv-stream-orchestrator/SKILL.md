@@ -16,6 +16,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - worker 下发模板：`assets/worker-dispatch-template.md`
 - worker 回传模板：`assets/worker-result-template.json`
 - worker 回传 JSON Schema：`assets/worker-result-schema.json`
+- worker 回传校验与 CSV 回写脚本：`scripts/worker_result_to_csv.py`
 - MCP 清理脚本（会话绑定版）：`../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py`
 
 ## 任务拆分规范（门控）
@@ -53,19 +54,20 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 ## 执行流程
 1. 使用 `multi_tool_use.parallel` 做只读并行探索，收集实现上下文。
 2. 按 `assets/plan-template.md` 输出计划，等待用户确认。
-3. 用户确认后，主线程先完成依赖引入与基础验证，再按“任务拆分规范（门控）”生成任务清单，并在项目根目录创建 `docs/csv/YYYY-MM-DD-<topic>/`（以 CSV 为主体的批次目录），然后落盘以下文件：
+3. 用户确认后，主线程先完成依赖引入与基础验证，再按“任务拆分规范（门控）”生成任务清单，并在项目根目录（目标代码仓库根目录；优先用 `git rev-parse --show-toplevel` 定位）创建 `docs/csv/YYYY-MM-DD-<topic>/`（以 CSV 为主体的批次目录），然后落盘以下文件：
+   - 分发前确保项目 `.gitignore` 已忽略 `docs/`（文档仅本地使用，不提交）。
    - `docs/plans/YYYY-MM-DD-<topic>-design.md`（写入用户确认后的执行计划）
    - `docs/csv/YYYY-MM-DD-<topic>/YYYY-MM-DD-<topic>.csv`（按 `assets/tasks-template.csv` 生成任务清单；回写命令/脚本必须显式使用 UTF-8 BOM）
    - `docs/csv/YYYY-MM-DD-<topic>/mcp-baseline.json`（由主线程在分发前写入会话 MCP 基线快照）
    - `docs/csv/YYYY-MM-DD-<topic>/artifacts/`（可选；本批次非 baseline 辅助产物目录，避免文件散落在 `docs/csv` 根目录）
 4. 进入批次调度前，主线程调用 `worker-mcp-cleanup` 的 `snapshot`（或直接执行脚本 `python ../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py --mode snapshot --snapshot-path docs/csv/YYYY-MM-DD-<topic>/mcp-baseline.json`）记录基线。
-5. 按 `目标路径`（尽量细到文件/最小冲突单元）做冲突分组：同组串行、异组并行；并使用 `spawn_agent` 创建 worker（并发上限由计划里的 `最大并发` 控制）。
-6. 主线程用 `send_input` 分发任务单：按 `assets/worker-dispatch-template.md` 渲染任务信息，并内联回传 JSON 模板。
+5. 按 `目标路径`（尽量细到文件/最小冲突单元）做冲突分组：同组串行、异组并行；并使用 `spawn_agent` 创建 worker（spawn 后直接下发任务单，不要先发“待命”消息；并发上限由计划里的 `最大并发` 控制）。
+6. 主线程分发任务单：按 `assets/worker-dispatch-template.md` 渲染任务信息，并内联回传 JSON 模板（首次分发可直接作为 `spawn_agent` 的 `message`；回流重试再用 `send_input`）。
 7. 主线程维护 `pending_worker_ids`（初始化为本批次全部 worker ID），并执行收敛循环：任务在循环内流式验收，`cleanup` 仅在全部任务完成后执行。
    - `while pending_worker_ids 非空`：调用 `wait(ids=pending_worker_ids)` 等待已终态 worker。
    - 异步通知（例如 `subagent_notification`）只做记录，不做状态迁移、不执行 `close_agent`、不改动 `pending_worker_ids`。
    - 仅按本次 `wait` 返回中的已终态 worker 执行打印与回收：先打印完成记录，再进入回传处理。
-   - 收到回传后先做 JSON Schema 强校验：
+   - 收到回传后先做 JSON Schema 强校验（推荐用 `scripts/worker_result_to_csv.py` 自动校验并回写 CSV）：
      - 不通过：优先要求同一 worker “仅重发 JSON”（不重做实现），最多 2 次。
      - 仍不通过：写入 `错误码=WORKER_OUTPUT_SCHEMA_INVALID`、`错误摘要` 以 `[worker] ` 开头；并将 `执行状态=worker_failed`、`最小验证结果=unknown` 回写到任务 CSV，后续由主线程补跑 `最小验证` 决定回流与否。
    - 对 Schema 校验通过的任务立即进入流式验收（逐任务、快速失败）：先对 `最小验证结果 != pass` 的任务补跑 `最小验证`，仅当 `pass` 时才进入正式验收。
@@ -79,6 +81,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 ## 路径与命名规则
 - `YYYY-MM-DD` 使用当前本地日期（例如 `2026-02-27`）。
 - `<topic>` 使用需求主题的短标识，建议小写短横线风格（示例：`reader-cache-fix`）。
+- `docs/` 仅本地使用：必须在项目 `.gitignore` 忽略（至少忽略 `docs/`），避免误提交。
 - 若 `docs/plans` 或 `docs/csv` 不存在，先创建目录再写文件。
 - 每个任务 CSV 必须使用独立目录：`docs/csv/YYYY-MM-DD-<topic>/`。
 - 目录主体固定为 CSV：禁止仅为 `mcp-baseline.json` 单独创建目录或使用 baseline 作为目录名。
@@ -89,6 +92,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 ## CSV 字段（中文列名）
 - `任务ID`
 - `来源任务ID`
+- `依赖任务ID`
 - `批次ID`
 - `目标路径`
 - `任务说明`
@@ -116,7 +120,6 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 ### 执行状态列 `执行状态`（状态值）
 - `todo`
 - `dispatched`
-- `working`
 - `implemented`
 - `worker_failed`
 - `blocked`
@@ -141,7 +144,6 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 | --- | --- | --- |
 | 主线程创建任务行 | `执行状态=todo`，`最小验证结果=unknown`，`验收状态=none` | `执行状态`、`最小验证结果`、`验收状态`、`重试次数=0`、`更新时间` |
 | 主线程分发任务（`send_input`） | `执行状态=dispatched` | `执行状态`、`更新时间` |
-| 任务进入执行中（主线程确认 worker 已开始处理） | `执行状态=working` | `执行状态`、`更新时间` |
 | worker 回传 `exec_state=implemented` | `执行状态=implemented` | `执行状态`、`最小验证结果=min_verify_state`、`错误码`、`错误摘要`、`更新时间` |
 | worker 回传 `exec_state=blocked` | `执行状态=blocked` | `执行状态`、`最小验证结果=min_verify_state`、`错误码`、`错误摘要`、`更新时间` |
 | worker 回传 `exec_state=worker_failed` | `执行状态=worker_failed` | `执行状态`、`最小验证结果=min_verify_state`、`错误码`、`错误摘要`、`更新时间` |
@@ -158,9 +160,10 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - worker 只回传 JSON（见 `assets/worker-result-template.json`），禁止直接修改任务 CSV。
 - 字段映射：worker 回传 `exec_state` -> CSV `执行状态`；worker 回传 `min_verify_state` -> CSV `最小验证结果`。
 - 直接失败门控：当 `min_verify_state=fail` 时，主线程直接置 `验收状态=accept_fail` 并回流重分发（不执行后续验收命令）。
-- 补跑最小验证：当 `min_verify_state` 为 `unknown` 或 `skip` 时，主线程必须补跑任务行里的 `最小验证`：
-  - 通过：回写 `最小验证结果=pass`，再进入正式验收。
-  - 不通过：置 `验收状态=accept_fail` 并回流重分发。
+- 补跑最小验证：
+  - 当 `min_verify_state=unknown` 时，主线程必须补跑任务行里的 `最小验证`。
+  - 当 `min_verify_state=skip` 且 worker 在 `notes` 写明“共享工作区/依赖未就绪”时，允许延后到批次收口阶段做一次“批次级最小验证”（通常为本批次统一的 build 命令），并批量回写相关任务 `最小验证结果=pass`、`验收状态=accept_pass`。
+  - 其他 `skip` 情况：主线程补跑任务行里的 `最小验证`。
 - 错误来源标记（worker）：写入 CSV 时，`错误码` 使用 `WORKER_` 前缀；`错误摘要` 以 `[worker] ` 开头。
 - 错误来源标记（accept）：写入 CSV 时，`错误码` 使用 `ACCEPT_` 前缀；`错误摘要` 以 `[accept] ` 开头。
 - 回传 JSON 强校验：主线程必须按 `assets/worker-result-schema.json` 校验 worker 回传；不通过时先要求 worker 仅重发 JSON，仍不通过则写入 `错误码=WORKER_OUTPUT_SCHEMA_INVALID` 并视为 `min_verify_state=unknown`，由主线程补跑 `最小验证` 决定后续回流与否。
