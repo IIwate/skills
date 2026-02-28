@@ -24,15 +24,22 @@
 ## 4. 验收策略
 - 验收执行：主线程流式验收（worker 完成即验收）
 - 快速失败：单任务首个未达标点即停止该任务剩余测试
-- 失败回流：写入 `错误码/错误摘要/修复提示` 并回流重分发
+- 失败回流：回写任务 CSV 的 `错误码/错误摘要/修复提示`，按需回流重分发
 
 ## 5. 批次参数
 - `批次ID`：{{batch_id}}
 - `最大并发`：{{max_concurrency}}
 - `最大重试次数`：{{max_attempt}}
 - `依赖策略`：主线程先完成依赖引入，子线程禁止引入依赖
+- `调度方式`：`spawn_agent` + `wait`（主线程强校验 worker 回传 JSON）
+- `通知与回收规则`：异步通知只记录；完成打印与 `close_agent` 仅由 `wait` 返回结果驱动
+- `MCP 回收策略`：每轮分发前 `snapshot`；本轮全部任务（含回流任务）完成 `wait + close_agent` 后执行一次 `cleanup`（会话绑定，先 dry-run；默认成功后自动删基线，失败或 `--keep-baseline` 时保留）
+- `MCP 快照路径`：{{mcp_snapshot_path}}
+- `CSV 目录`：{{csv_dir}}
+- `目录规约`：以 `{{csv_dir}}` 为主体；`mcp-baseline.json` 与 CSV 同目录；非 baseline 辅助产物放 `{{csv_artifacts_dir}}`
 
 ## 6. 输出物
+- 设计文档：{{design_path}}
 - 任务 CSV：{{csv_path}}
-- 验收日志：{{accept_log_path}}
-- 回流 CSV：{{requeue_csv_path}}
+- MCP 快照：{{mcp_snapshot_path}}
+- 辅助产物目录：{{csv_artifacts_dir}}

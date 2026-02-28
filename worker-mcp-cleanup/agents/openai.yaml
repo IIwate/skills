@@ -1,0 +1,3 @@
+interface:
+  display_name: "Worker MCP Cleanup"
+  short_description: "Help with Worker MCP Cleanup tasks"

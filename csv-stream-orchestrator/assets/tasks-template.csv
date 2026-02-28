@@ -1,2 +1,2 @@
 ﻿任务ID,来源任务ID,批次ID,目标路径,任务说明,最小验证,执行状态,最小验证结果,验收状态,重试次数,最大重试次数,错误码,错误摘要,修复提示,更新时间
-task-001,,batch-001,src/example.ts,实现 XXX 功能，保持现有接口兼容,npm run test -- example.spec.ts,todo,unknown,none,0,3,,,,2026-02-27T00:00:00Z
+task-001,,batch-001,src/example.ts,实现 XXX 功能，保持现有接口兼容,npm run test -- example.spec.ts,todo,unknown,none,0,3,,,,{{更新时间}}
