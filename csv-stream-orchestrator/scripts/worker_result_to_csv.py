@@ -82,8 +82,7 @@ def validate_worker_result(obj: Any, schema: dict[str, Any]) -> list[ValidationE
         if item_schema.get("type") != "string":
             return
         for i, item in enumerate(value):
-            if not isinstance(item, str):
-                errors.append(ValidationError(f"{path}[{i}]", "必须是 string"))
+            check_string(item, f"{path}[{i}]", item_schema)
 
     if schema.get("additionalProperties") is False:
         allowed = set(properties.keys())

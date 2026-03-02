@@ -42,6 +42,7 @@ description: 仅供 `csv-stream-orchestrator` 主线程在其流程内调用的 
 ## 脚本说明
 
 - 脚本路径：`scripts/worker_mcp_cleanup.py`
+- 脚本会尝试将 stdout/stderr 设为 UTF-8，避免 `--help` 与 JSON 输出出现中文乱码。
 - 支持模式：
   - `snapshot`：记录当前 MCP 进程 PID 基线。
   - `list-delta`：只列出相对基线新增的 MCP 进程，不执行结束进程。
@@ -94,6 +95,8 @@ description: 仅供 `csv-stream-orchestrator` 主线程在其流程内调用的 
 - `owner_delta_count`
 - `non_owner_delta_count`
 - `killed_pids`
+- `ignored_not_found_count`（可选；taskkill 返回进程不存在时计入忽略，不视为失败）
+- `ignored_not_found`（可选；仅用于降噪与追溯）
 - `failed`
 - `snapshot_retained`
 - `snapshot_retain_reason`

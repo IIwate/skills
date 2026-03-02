@@ -20,7 +20,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 审查 worker 回传模板：`assets/review-result-template.json`
 - 审查 worker 回传 JSON Schema：`assets/review-result-schema.json`
 - worker 回传校验与 CSV 回写脚本：`scripts/worker_result_to_csv.py`
-- 审查回传校验与 CSV 追加脚本（可选）：`scripts/review_result_to_csv.py`（是否调用由主线程决定）
+- 审查回传校验与 CSV 追加脚本（可选）：`scripts/review_result_to_csv.py`（是否调用由主线程决定；`--batch-id` 可省略，缺省写入占位 `batch-unassigned`，后续由主线程统一分配）
 - 修改任一 Schema（`assets/*-schema.json`）时，必须同步更新并验证对应 Python 脚本，禁止只改一侧。
 - MCP 清理脚本（会话绑定版）：`../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py`
 
@@ -73,7 +73,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 禁止仅基于单个 worker 结果给出整轮审查结论。
 - 主线程不做实际代码质量判断，只按验收门槛执行（通常为编译/构建通过）；审查建议仅用于决定是否追加重拆分任务。
 - 审查结果若 `review_decision=NEEDS_IMPROVEMENT` 且 `new_tasks` 非空，主线程必须将 `new_tasks` 追加写入原 CSV，并按常规批次流程继续分发。
-- 主线程可选择调用 `scripts/review_result_to_csv.py` 完成审查结果校验与任务追加；是否调用由主线程按当前批次情况决定，不是强制步骤。
+- 主线程可选择调用 `scripts/review_result_to_csv.py` 完成审查结果校验与任务追加；是否调用由主线程按当前批次情况决定，不是强制步骤（`--batch-id` 可省略，缺省写入占位 `batch-unassigned`，后续由主线程统一分配）。
 - 追加任务必须填写 `来源任务ID`（映射到被审查任务），且初始化状态固定为：`执行状态=todo`、`最小验证结果=unknown`、`验收状态=none`、`重试次数=0`。
 - 审查结果若 `review_decision=PASS` 或 `new_tasks` 为空，视为本轮不追加任务，直接进入收口。
 - 审查结果若 `review_decision=BLOCKED`，主线程写入 `REVIEW_BLOCKED` 并停止自动重分发，转人工处理。

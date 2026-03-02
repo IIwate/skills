@@ -15,6 +15,8 @@ DEFAULT_SCHEMA_PATH = (
     Path(__file__).resolve().parent.parent / "assets" / "review-result-schema.json"
 )
 
+UNASSIGNED_BATCH_ID = "batch-unassigned"
+
 CSV_REQUIRED_COLUMNS = {
     "任务ID",
     "来源任务ID",
@@ -33,6 +35,88 @@ CSV_REQUIRED_COLUMNS = {
     "修复提示",
     "更新时间",
 }
+
+
+ISSUE_CATEGORY_ALIAS_MAP: dict[str, str] = {
+    "test": "test_coverage",
+    "correctness": "reliability",
+    "stability": "reliability",
+    "edge_cases": "reliability",
+}
+
+
+def extract_allowed_issue_categories(schema: dict[str, Any]) -> set[str]:
+    try:
+        enum_values = (
+            (schema.get("properties", {}) or {})
+            .get("issues", {})
+            .get("items", {})
+            .get("properties", {})
+            .get("category", {})
+            .get("enum", [])
+        )
+    except Exception:
+        return set()
+
+    if not isinstance(enum_values, list) or not all(isinstance(v, str) for v in enum_values):
+        return set()
+    return set(enum_values)
+
+
+def normalize_issue_category(value: Any, allowed_categories: set[str]) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    normalized = value.strip().lower()
+    if not normalized:
+        return value
+
+    normalized = re.sub(r"[-\s]+", "_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+
+    mapped = ISSUE_CATEGORY_ALIAS_MAP.get(normalized, normalized)
+    if mapped in allowed_categories:
+        return mapped
+    return value
+
+
+def normalize_min_verify(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+
+    text = value.strip()
+    if not text:
+        return value
+
+    normalized = re.sub(r"[\r\n]+", " && ", text)
+    normalized = re.sub(r"\s*；\s*", " && ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = re.sub(r"(?:\s*&&\s*){2,}", " && ", normalized).strip()
+    normalized = re.sub(r"^(?:&&\s*)+", "", normalized).strip()
+    normalized = re.sub(r"(?:\s*&&)+$", "", normalized).strip()
+    return normalized
+
+
+def normalize_review_result_inplace(obj: dict[str, Any], allowed_categories: set[str]) -> None:
+    issues = obj.get("issues")
+    if allowed_categories and isinstance(issues, list):
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            if "category" not in issue:
+                continue
+            issue["category"] = normalize_issue_category(
+                issue.get("category"), allowed_categories
+            )
+
+    new_tasks = obj.get("new_tasks")
+    if isinstance(new_tasks, list):
+        for task in new_tasks:
+            if not isinstance(task, dict):
+                continue
+            if "min_verify" not in task:
+                continue
+            task["min_verify"] = normalize_min_verify(task.get("min_verify"))
 
 
 def ensure_utf8_stdio() -> None:
@@ -312,13 +396,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--batch-id",
         default="",
-        help="追加任务写入的批次ID（仅 --apply 且存在 new_tasks 时必填）",
+        help=(
+            "追加任务写入的批次ID（可选）。"
+            f"为空时将写入占位：{UNASSIGNED_BATCH_ID}，后续由主线程统一分配。"
+        ),
     )
     args = parser.parse_args(argv)
 
     schema = load_json_from_path(Path(args.schema_path))
     csv_path = Path(args.csv_path)
     results = collect_results(args)
+    allowed_issue_categories = extract_allowed_issue_categories(schema)
 
     fieldnames, rows = read_csv_rows(csv_path)
     missing_cols = sorted(c for c in CSV_REQUIRED_COLUMNS if c not in fieldnames)
@@ -328,6 +416,7 @@ def main(argv: list[str]) -> int:
     blocked_review_ids: list[str] = []
     append_candidates: list[dict[str, Any]] = []
     for result in results:
+        normalize_review_result_inplace(result, allowed_issue_categories)
         errors = validate_review_result(result, schema)
         if errors:
             for e in errors:
@@ -385,12 +474,11 @@ def main(argv: list[str]) -> int:
         )
         return 0
 
-    if append_candidates and not args.batch_id.strip():
-        raise RuntimeError("--apply 模式下，当存在可追加任务时必须提供 --batch-id")
+    batch_id = args.batch_id.strip() or UNASSIGNED_BATCH_ID
 
     appended_ids: list[str] = []
     for task in append_candidates:
-        row = build_row_from_review_task(fieldnames, task, args.batch_id.strip())
+        row = build_row_from_review_task(fieldnames, task, batch_id)
         rows.append(row)
         appended_ids.append(str(task["task_id"]))
 

@@ -4,6 +4,7 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -12,6 +13,35 @@ from typing import Any
 ACE_TOOL_PATTERN = re.compile(r"ace-tool", re.IGNORECASE)
 CODE_INDEX_PATTERN = re.compile(r"code-index-mcp(\.exe)?", re.IGNORECASE)
 CODEX_NODE_PATTERN = re.compile(r"node_modules[/\\]@openai[/\\]codex[/\\]bin[/\\]codex\.js", re.IGNORECASE)
+
+
+PROCESS_NOT_FOUND_PATTERNS = [
+    re.compile(r"\bnot\s+found\b", re.IGNORECASE),
+    re.compile(r"\bno\s+running\s+instance\b", re.IGNORECASE),
+    re.compile(r"未找到进程"),
+    re.compile(r"找不到进程"),
+    re.compile(r"没有运行的任务实例"),
+]
+
+
+def ensure_utf8_stdio() -> None:
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+
+ensure_utf8_stdio()
+
+
+def is_process_not_found_message(message: str) -> bool:
+    if not message:
+        return False
+    text = message.strip()
+    if not text:
+        return False
+    return any(pattern.search(text) is not None for pattern in PROCESS_NOT_FOUND_PATTERNS)
 
 
 def now_iso() -> str:
@@ -281,6 +311,7 @@ def mode_cleanup(snapshot_path: pathlib.Path, dry_run: bool, keep_baseline: bool
     targets = sorted(owner_delta, key=lambda item: int(item["ProcessId"]), reverse=True)
 
     killed: list[int] = []
+    ignored_not_found: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
     if owner_alive and not dry_run:
         for proc in targets:
@@ -289,7 +320,12 @@ def mode_cleanup(snapshot_path: pathlib.Path, dry_run: bool, keep_baseline: bool
             if ok:
                 killed.append(pid)
             else:
-                failed.append({"pid": pid, "name": proc.get("Name", ""), "error": error_text})
+                if is_process_not_found_message(error_text):
+                    ignored_not_found.append(
+                        {"pid": pid, "name": proc.get("Name", ""), "reason": "process_not_found"}
+                    )
+                else:
+                    failed.append({"pid": pid, "name": proc.get("Name", ""), "error": error_text})
 
     time.sleep(0.5)
     refreshed_all = get_all_processes()
@@ -313,9 +349,11 @@ def mode_cleanup(snapshot_path: pathlib.Path, dry_run: bool, keep_baseline: bool
         "owner_delta_count": len(owner_delta),
         "non_owner_delta_count": len(non_owner_delta),
         "killed_count": len(killed),
+        "ignored_not_found_count": len(ignored_not_found),
         "failed_count": len(failed),
         "remaining_owner_delta_count": len(remaining_owner),
         "killed_pids": killed,
+        "ignored_not_found": ignored_not_found,
         "failed": failed,
         "skipped_non_owner": sanitize_process_list(non_owner_delta),
     }

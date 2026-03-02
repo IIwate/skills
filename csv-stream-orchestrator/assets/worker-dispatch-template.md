@@ -21,6 +21,9 @@
 8. `error_code` 需使用 `WORKER_` 前缀（示例：`WORKER_DEPENDENCY_REQUIRED`、`WORKER_MIN_VERIFY_FAIL`）。
 9. 回传 JSON 将被主线程按 Schema 强校验；不符合会被标记为 `WORKER_OUTPUT_SCHEMA_INVALID`，主线程可能会补跑最小验证并回流重试。
 10. 若因共享工作区并发冲突（或依赖未就绪）无法执行最小验证，允许设置 `min_verify_state=skip`，并在 `notes` 写明原因（建议固定文案：`共享工作区` / `依赖未就绪`）。
+11. `files_changed` 必须使用 **仓库根相对路径** 且分隔符一律使用 **正斜杠 `/`**。
+    - 禁止绝对路径（如 `C:/repo/src/a.ts`、`\\\\server\\\\share\\\\a.ts`）。
+    - 禁止前缀 `a/`、`b/`、`./`；禁止使用反斜杠 `\\`。
 
 ## 最小验证
 `{{最小验证}}`

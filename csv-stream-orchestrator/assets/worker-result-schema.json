@@ -25,7 +25,14 @@
         "deliverables": { "type": "array", "items": { "type": "string" } }
       }
     },
-    "files_changed": { "type": "array", "items": { "type": "string" } },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^(?!a/)(?!b/)(?!\\./)(?!/)(?![A-Za-z]:)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\r\\n\\\\:]+$"
+      }
+    },
     "commands_run": { "type": "array", "items": { "type": "string" } },
     "error_code": { "type": "string", "pattern": "^(|WORKER_[A-Z0-9_]+)$" },
     "error_summary": { "type": "string" },

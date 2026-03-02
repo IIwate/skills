@@ -95,7 +95,11 @@
           "depends_on_task_id": { "type": "string" },
           "target_path": { "type": "string", "minLength": 1 },
           "task_desc": { "type": "string", "minLength": 1 },
-          "min_verify": { "type": "string", "minLength": 1 },
+          "min_verify": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\r\\n；]+$"
+          },
           "max_retry": { "type": "integer", "minimum": 1, "maximum": 10 }
         }
       }
