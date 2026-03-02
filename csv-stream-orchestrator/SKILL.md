@@ -20,6 +20,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
 - 审查 worker 回传模板：`assets/review-result-template.json`
 - 审查 worker 回传 JSON Schema：`assets/review-result-schema.json`
 - worker 回传校验与 CSV 回写脚本：`scripts/worker_result_to_csv.py`
+- CSV UTF-8 BOM 补齐/校验脚本（可选）：`scripts/ensure_utf8_bom.py`
 - 审查回传校验与 CSV 追加脚本（可选）：`scripts/review_result_to_csv.py`（是否调用由主线程决定；`--batch-id` 可省略，缺省写入占位 `batch-unassigned`，后续由主线程统一分配）
 - 修改任一 Schema（`assets/*-schema.json`）时，必须同步更新并验证对应 Python 脚本，禁止只改一侧。
 - MCP 清理脚本（会话绑定版）：`../worker-mcp-cleanup/scripts/worker_mcp_cleanup.py`
@@ -156,6 +157,7 @@ description: 将需求转为并行探索、计划评审、CSV 子任务分发、
   - `[System.IO.File]::WriteAllText($csvPath, $csvContent, $utf8Bom)`
 - Python 示例（覆盖写入）：
   - `with open(csv_path, "w", encoding="utf-8-sig", newline="") as f: ...`
+- 主线程优先使用 `apply_patch` 落盘 CSV（避免 PowerShell 内联写文件的转义/解析问题）；落盘后再执行 `python scripts/ensure_utf8_bom.py --apply <csv_path>` 补齐 BOM。不带 `--apply` 仅校验（缺失时退出码为 `2`）。
 - 回写后可抽样校验 BOM 头：`[System.IO.File]::ReadAllBytes($csvPath)[0..2]` 应为 `EF BB BF`。
 
 ## 状态机约束
